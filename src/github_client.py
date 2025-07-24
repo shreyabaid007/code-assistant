@@ -92,3 +92,76 @@ class GitHubClient:
                     continue
 
         return code_files
+
+    def extract_key_content(self, file: CodeFile) -> str:
+        """Extract key content from file by removing imports, comments, and empty lines"""
+        lines = file.content.split('\n')
+        meaningful_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            # Skip empty lines
+            if not stripped:
+                continue
+            # Skip single-line comments (basic patterns)
+            if (stripped.startswith('#') or 
+                stripped.startswith('//') or 
+                stripped.startswith('/*') or
+                stripped.startswith('*') or
+                stripped.startswith('*/') or
+                stripped.startswith('<!--')):
+                continue
+            # Skip imports/requires (basic patterns)
+            if (stripped.startswith('import ') or 
+                stripped.startswith('from ') or
+                stripped.startswith('require(') or
+                stripped.startswith('const ') and 'require(' in stripped or
+                stripped.startswith('import{') or
+                stripped.startswith('import {')):
+                continue
+                
+            meaningful_lines.append(line)
+            
+            # Return first 50 meaningful lines
+            if len(meaningful_lines) >= 50:
+                break
+                
+        return '\n'.join(meaningful_lines)
+
+    def select_important_files(self, code_files: List[CodeFile], max_files: int = 10) -> List[CodeFile]:
+        """Select the most important files for analysis, prioritizing main files and larger files"""
+        if not code_files:
+            return []
+            
+        # Priority scoring function
+        def get_priority_score(file: CodeFile) -> int:
+            score = 0
+            filename = file.path.lower()
+            
+            # High priority files
+            if any(name in filename for name in ['main.py', 'app.py', '__init__.py', 'index.js', 'index.ts']):
+                score += 100
+            
+            # Config files
+            if any(ext in filename for ext in ['.json', '.yaml', '.yml', '.toml', '.config']):
+                score += 50
+                
+            # Core application files (not in subdirectories)
+            if '/' not in file.path or file.path.count('/') <= 1:
+                score += 30
+                
+            # Larger files (more likely to contain important logic)
+            if file.size > 1000:
+                score += 20
+                
+            # Source code over other types
+            if file.file_type.value == 'source_code':
+                score += 10
+                
+            return score
+            
+        # Sort by priority score (descending)
+        sorted_files = sorted(code_files, key=get_priority_score, reverse=True)
+        
+        # Return top files up to max_files limit
+        return sorted_files[:max_files]

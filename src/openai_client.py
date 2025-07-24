@@ -9,70 +9,195 @@ class OpenAIAnalyzer:
     def __init__(self):
         self.client = OpenAI(api_key=settings.openai_api_key)
 
+    def summarize_large_files(self, files: List[CodeFile]) -> List[str]:
+        """Create concise summaries for large files using gpt-4o-mini"""
+        summaries = []
+        
+        for file in files:
+            if len(file.content) > settings.max_file_content_chars:
+                try:
+                    # Truncate content for summarization
+                    truncated_content = file.content[:settings.max_file_content_chars]
+                    
+                    response = self.client.chat.completions.create(
+                        model=settings.analysis_model,  # gpt-4o-mini
+                        messages=[{
+                            "role": "user",
+                            "content": f"""Summarize this {file.language} file in 2-3 sentences. Focus on its main purpose and key functionality.
+
+File: {file.path}
+Content:
+{truncated_content}"""
+                        }],
+                        max_tokens=100,
+                        temperature=0.1
+                    )
+                    
+                    summary = response.choices[0].message.content.strip()
+                    summaries.append(f"{file.path}: {summary}")
+                    
+                except Exception as e:
+                    print(f"Error summarizing {file.path}: {e}")
+                    summaries.append(f"{file.path}: Large {file.language} file ({file.size} bytes)")
+            else:
+                # For smaller files, just note their existence
+                summaries.append(f"{file.path}: {file.language} file ({file.size} bytes)")
+                
+        return summaries
+
+    def _prepare_lightweight_context(self, code_files: List[CodeFile], repo_info: dict) -> str:
+        """Prepare lightweight context using file summaries instead of full content"""
+        context = f"""
+Repository: {repo_info.get('name', 'Unknown')}
+Description: {repo_info.get('description', 'No description')}
+Language: {repo_info.get('language', 'Multiple')}
+Stars: {repo_info.get('stargazers_count', 0)}
+Forks: {repo_info.get('forks_count', 0)}
+
+File Structure Summary:
+"""
+        
+        # Get file summaries
+        summaries = self.summarize_large_files(code_files)
+        for summary in summaries:
+            context += f"  - {summary}\n"
+            
+        return context
+
     def analyze_repository(self, code_files: List[CodeFile], repo_info: dict, repo_url: str) -> RepositoryAnalysis:
-        """Main analysis using Responses API with multiple tools"""
-
-        # Prepare repository context
-        repo_context = self._prepare_repo_context(code_files, repo_info)
-
-        # Use Responses API with built-in tools for comprehensive analysis
-        response = self.client.responses.create(
-            model=settings.reasoning_model,  # o4-mini for reasoning
-            input=f"""
-            Analyze this repository comprehensively: {repo_url}
-
-            Repository Context:
-            {repo_context}
-
-            Please provide:
-            1. A detailed summary of what this repository does
-            2. Complete technology stack analysis
-            3. Code quality insights and recommendations
-            4. Documentation assessment
-            5. Maintainability analysis
-            6. Current industry trend comparisons (use web search)
-
-            Structure your response as JSON following this schema:
-            {{
-                "summary": "detailed repository summary",
-                "tech_stack": {{
-                    "languages": ["list of languages"],
-                    "frameworks": ["list of frameworks"],
-                    "libraries": ["list of libraries"],
-                    "tools": ["list of tools"],
-                    "databases": ["list of databases"]
-                }},
-                "insights": [
-                    {{
-                        "category": "bug|improvement|architecture|performance",
-                        "severity": "low|medium|high|critical", 
-                        "description": "detailed description",
-                        "file_path": "path/to/file.py",
-                        "line_number": 42,
-                        "suggestion": "specific improvement suggestion"
-                    }}
-                ],
-                "documentation_score": 0.85,
-                "code_quality_score": 0.92,
-                "maintainability_score": 0.78,
-                "trending_comparisons": ["comparison with current trends"],
-                "recommendations": ["actionable recommendations"]
-            }}
-            """,
-            tools=[
-                {"type": "web_search"},  # For trend analysis
-                {"type": "code_interpreter"}  # For code analysis
-            ],
-            store=False  # Don't store conversation
-        )
-
-        # Parse response and create structured analysis
+        """Two-stage cost-optimized analysis using regular chat completions"""
+        from .github_client import GitHubClient
+        
+        # Initialize GitHub client for file selection
+        github_client = GitHubClient()
+        
+        # Stage 1: Quick overview with lightweight context using gpt-4o-mini
+        print("Stage 1: Quick repository overview...")
+        lightweight_context = self._prepare_lightweight_context(code_files, repo_info)
+        
         try:
-            analysis_data = json.loads(response.output_text)
-            return self._create_analysis_object(analysis_data, repo_url)
-        except json.JSONDecodeError:
-            # Fallback parsing if JSON is malformed
-            return self._parse_fallback_response(response.output_text, repo_url)
+            stage1_response = self.client.chat.completions.create(
+                model=settings.analysis_model,  # gpt-4o-mini
+                messages=[{
+                    "role": "user", 
+                    "content": f"""Provide a quick overview of this repository: {repo_url}
+
+{lightweight_context}
+
+Respond with a brief analysis (max 500 tokens) covering:
+1. Repository purpose and main functionality
+2. Primary technologies used
+3. Overall architecture assessment
+
+Format as JSON:
+{{
+    "summary": "brief description",
+    "primary_tech": ["main technologies"],
+    "architecture_notes": "brief architecture assessment"
+}}"""
+                }],
+                max_tokens=500,
+                temperature=0.1
+            )
+            
+            stage1_data = json.loads(stage1_response.choices[0].message.content)
+            print(f"Stage 1 completed. Tokens used: {stage1_response.usage.total_tokens}")
+            
+        except Exception as e:
+            print(f"Stage 1 error: {e}")
+            stage1_data = {"summary": "Repository analysis", "primary_tech": [], "architecture_notes": ""}
+        
+        # Stage 2: Detailed analysis on selected important files using gpt-4o
+        print("Stage 2: Detailed analysis of key files...")
+        important_files = github_client.select_important_files(code_files, settings.max_analysis_files)
+        
+        # Extract key content and limit file sizes
+        detailed_context = f"""
+Repository: {repo_info.get('name', 'Unknown')} - {stage1_data.get('summary', '')}
+Key Technologies: {', '.join(stage1_data.get('primary_tech', []))}
+
+Important Files Analysis:
+"""
+        
+        for file in important_files:
+            # Use extract_key_content for code files, limit all files
+            if file.file_type.value == 'source_code':
+                content = github_client.extract_key_content(file)
+            else:
+                content = file.content[:settings.max_file_content_chars]
+                
+            detailed_context += f"""
+File: {file.path} ({file.language})
+{content}
+
+---
+"""
+        
+        try:
+            stage2_response = self.client.chat.completions.create(
+                model=settings.reasoning_model,  # gpt-4o
+                messages=[{
+                    "role": "user",
+                    "content": f"""Provide detailed analysis of this repository's key files.
+
+{detailed_context}
+
+Provide comprehensive analysis (max 1000 tokens) as JSON:
+{{
+    "tech_stack": {{
+        "languages": ["detected languages"],
+        "frameworks": ["detected frameworks"], 
+        "libraries": ["detected libraries"],
+        "tools": ["detected tools"],
+        "databases": ["detected databases"]
+    }},
+    "insights": [
+        {{
+            "category": "bug|improvement|architecture|performance",
+            "severity": "low|medium|high|critical",
+            "description": "detailed issue description", 
+            "file_path": "path/to/file.py",
+            "line_number": null,
+            "suggestion": "specific improvement suggestion"
+        }}
+    ],
+    "documentation_score": 0.75,
+    "code_quality_score": 0.85,
+    "maintainability_score": 0.80,
+    "recommendations": ["specific actionable recommendations"]
+}}"""
+                }],
+                max_tokens=1000,
+                temperature=0.1
+            )
+            
+            stage2_data = json.loads(stage2_response.choices[0].message.content)
+            print(f"Stage 2 completed. Tokens used: {stage2_response.usage.total_tokens}")
+            
+        except Exception as e:
+            print(f"Stage 2 error: {e}")
+            stage2_data = {
+                "tech_stack": {"languages": [], "frameworks": [], "libraries": [], "tools": [], "databases": []},
+                "insights": [],
+                "documentation_score": 0.5,
+                "code_quality_score": 0.5, 
+                "maintainability_score": 0.5,
+                "recommendations": []
+            }
+        
+        # Combine results from both stages
+        combined_data = {
+            "summary": stage1_data.get('summary', ''),
+            "tech_stack": stage2_data.get('tech_stack', {}),
+            "insights": stage2_data.get('insights', []),
+            "documentation_score": stage2_data.get('documentation_score', 0.5),
+            "code_quality_score": stage2_data.get('code_quality_score', 0.5),
+            "maintainability_score": stage2_data.get('maintainability_score', 0.5),
+            "trending_comparisons": [],  # Removed to save costs
+            "recommendations": stage2_data.get('recommendations', [])
+        }
+        
+        return self._create_analysis_object(combined_data, repo_url)
 
     def _prepare_repo_context(self, code_files: List[CodeFile], repo_info: dict) -> str:
         """Prepare repository context for analysis"""

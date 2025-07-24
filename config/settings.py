@@ -9,8 +9,10 @@ class Settings(BaseSettings):
     max_file_size: int = 100_000  # bytes
     supported_extensions: list = ['.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.go', '.rs', '.rb',
                                   '.php']
-    analysis_model: str = "gpt-4.1"  # Latest coding-focused model
-    reasoning_model: str = "o4-mini"  # Latest reasoning model
+    analysis_model: str = "gpt-4o-mini"  # Cost-optimized model for analysis
+    reasoning_model: str = "gpt-4o"  # High-quality model for reasoning
+    max_analysis_files: int = 10  # Maximum files to analyze in detail
+    max_file_content_chars: int = 5000  # Maximum characters per file for analysis
 
     class Config:
         env_file = ".env"
