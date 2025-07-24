@@ -4,14 +4,23 @@ from pathlib import Path
 from typing import Optional
 from .github_client import GitHubClient
 from .openai_client import OpenAIAnalyzer
+from .ollama_client import OllamaAnalyzer
 from .models import RepositoryAnalysis
 from config.settings import settings
 
 
 class RepoAnalyzer:
-    def __init__(self):
+    def __init__(self, provider: Optional[str] = None):
         self.github_client = GitHubClient(settings.github_token)
-        self.openai_analyzer = OpenAIAnalyzer()
+        self.provider = provider or settings.llm_provider
+        
+        # Simple provider selection
+        if self.provider == "ollama":
+            self.llm_client = OllamaAnalyzer()
+            print("✅ Using Ollama for analysis")
+        else:
+            self.llm_client = OpenAIAnalyzer()
+            print("✅ Using OpenAI for analysis")
 
     def analyze_repository(self, repo_url: str) -> RepositoryAnalysis:
         """Main method to analyze a repository"""
@@ -37,8 +46,8 @@ class RepoAnalyzer:
             print(f"Found {len(code_files)} analyzable files")
 
             # Perform AI analysis
-            print("🤖 Running AI analysis...")
-            analysis = self.openai_analyzer.analyze_repository(
+            print(f"🤖 Running AI analysis with {self.provider}...")
+            analysis = self.llm_client.analyze_repository(
                 code_files, repo_info, repo_url
             )
 
@@ -57,10 +66,13 @@ def main():
     console = Console()
 
     @app.command()
-    def analyze(repo_url: str):
+    def analyze(
+        repo_url: str, 
+        provider: Optional[str] = typer.Option(None, "--provider", "-p", help="LLM provider: openai or ollama")
+    ):
         """Analyze a GitHub repository"""
         try:
-            analyzer = RepoAnalyzer()
+            analyzer = RepoAnalyzer(provider=provider)
             analysis = analyzer.analyze_repository(repo_url)
 
             # Display results
