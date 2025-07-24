@@ -2,10 +2,10 @@ import tempfile
 import shutil
 from pathlib import Path
 from typing import Optional
-from .github_client import GitHubClient
-from .openai_client import OpenAIAnalyzer
-from .ollama_client import OllamaAnalyzer
-from .models import RepositoryAnalysis
+from src.github_client import GitHubClient
+from src.openai_client import OpenAIAnalyzer
+from src.ollama_client import OllamaAnalyzer
+from src.models import RepositoryAnalysis
 from config.settings import settings
 
 

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     
     # Ollama Settings
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
+    ollama_model: str = "deepseek-coder:6.7b"
     
     # Analysis Settings
     max_analysis_files: int = 10

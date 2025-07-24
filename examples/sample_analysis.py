@@ -5,7 +5,7 @@ import asyncio
 async def main():
     # Example repositories to analyze
     test_repos = [
-        "https://github.com/fastapi/fastapi",
+        "https://github.com/shreyabaid007/sentiment-analyzer",
     ]
 
     analyzer = RepoAnalyzer()
